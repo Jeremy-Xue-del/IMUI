@@ -1,18 +1,25 @@
 package com.example.imui.friend
 
 import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.imui.databinding.ActivityFriendBinding
 import com.example.imui.friend.adapter.FriendAdapter
+import com.example.imui.friend.data.LocalFriendRepository
 import com.example.imui.friend.decoration.FriendItemDecoration
 import com.example.imui.friend.model.FriendItem
-import java.util.Random
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class FriendActivity : AppCompatActivity() {
     private lateinit var binding: ActivityFriendBinding
     private lateinit var adapter: FriendAdapter
+    private val repository = LocalFriendRepository()
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -21,7 +28,7 @@ class FriendActivity : AppCompatActivity() {
         setContentView(binding.root)
         
         setupRecyclerView()
-        loadSampleData()
+        loadFriendPosts()
         
         binding.back.setOnClickListener {
             finish()
@@ -29,7 +36,14 @@ class FriendActivity : AppCompatActivity() {
     }
     
     private fun setupRecyclerView() {
-        adapter = FriendAdapter()
+        adapter = FriendAdapter(
+            onLikeClicked = { item ->
+                handleLikeClick(item)
+            },
+            onCommentClicked = { item ->
+                handleCommentClick(item)
+            }
+        )
         
         binding.friendList.apply {
             layoutManager = LinearLayoutManager(this@FriendActivity)
@@ -49,121 +63,56 @@ class FriendActivity : AppCompatActivity() {
         }
     }
     
-    private fun loadSampleData() {
-        val items = mutableListOf<FriendItem>()
-        
-        val usernames = listOf("张三", "李四", "王五", "赵六", "钱七")
-        val contents = listOf(
-            "今天天气真好，出去走走。",
-            "新学了一道菜，味道不错！",
-            "最近在看一本好书，推荐给大家。",
-            "周末去爬山，风景美极了！",
-            "工作中遇到一个技术难题，终于解决了。"
-        )
-        
-        val random = Random()
-        
-        repeat(20) { index ->
-            val username = usernames[random.nextInt(usernames.size)]
-            val content = contents[random.nextInt(contents.size)]
-            val likes = random.nextInt(100)
-            val comments = random.nextInt(20)
-            val time = "${random.nextInt(23) + 1}小时前"
-            
-            when (index % 4) {
-                0 -> {
-                    // 文本帖子
-                    items.add(
-                        FriendItem.TextPost(
-                            id = index.toLong(),
-                            username = username,
-                            avatarUrl = null,
-                            content = content,
-                            likes = likes,
-                            comments = comments,
-                            time = time
-                        )
-                    )
+    private fun loadFriendPosts() {
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                val posts = withContext(Dispatchers.IO) {
+                    repository.getFriendPosts()
                 }
-                1 -> {
-                    // 图片帖子
-                    items.add(
-                        FriendItem.ImagePost(
-                            id = index.toLong(),
-                            username = username,
-                            avatarUrl = null,
-                            content = content,
-                            imageUrl = "",
-                            likes = likes,
-                            comments = comments,
-                            time = time
-                        )
-                    )
-                }
-                2 -> {
-                    // 视频帖子
-                    items.add(
-                        FriendItem.VideoPost(
-                            id = index.toLong(),
-                            username = username,
-                            avatarUrl = null,
-                            content = content,
-                            videoThumbnailUrl = "",
-                            videoUrl = "",
-                            likes = likes,
-                            comments = comments,
-                            time = time
-                        )
-                    )
-                }
-                3 -> {
-                    items.add(
-                        FriendItem.TextPost(
-                            id = index.toLong(),
-                            username = username,
-                            avatarUrl = null,
-                            content = content,
-                            likes = likes,
-                            comments = comments,
-                            time = time
-                        )
-                    )
-                }
+                adapter.submitList(posts)
+            } catch (e: Exception) {
+                Toast.makeText(this@FriendActivity, "加载失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
-        
-        adapter.submitList(items)
-        
-        // 模拟点赞功能
-        binding.friendList.addOnScrollListener(object : androidx.recyclerview.widget.RecyclerView.OnScrollListener() {
-            override fun onScrolled(recyclerView: androidx.recyclerview.widget.RecyclerView, dx: Int, dy: Int) {
-                super.onScrolled(recyclerView, dx, dy)
+    }
+    
+    private fun handleLikeClick(item: FriendItem) {
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                val success = withContext(Dispatchers.IO) {
+                    repository.likePost(item.id)
+                }
                 
-                // 模拟用户交互，随机增加某个item的点赞数
-                if (dy > 0 && random.nextInt(100) < 5) { // 有一定概率触发点赞
+                if (success) {
+                    // 更新列表中的点赞数
                     val currentList = adapter.currentList.toMutableList()
-                    if (currentList.isNotEmpty()) {
-                        val position = random.nextInt(currentList.size)
-                        when (val item = currentList[position]) {
-                            is FriendItem.TextPost -> {
-                                val updated = item.copy(likes = item.likes + 1)
-                                currentList[position] = updated
-                                adapter.submitList(currentList)
-                            }
-                            is FriendItem.ImagePost -> {
-                                val updated = item.copy(likes = item.likes + 1)
-                                currentList[position] = updated
-                                adapter.submitList(currentList)
-                            }
-                            is FriendItem.VideoPost -> {
-                                val updated = item.copy(likes = item.likes + 1)
-                                currentList[position] = updated
-                                adapter.submitList(currentList)
-                            }
+                    val index = currentList.indexOfFirst { it.id == item.id }
+                    
+                    if (index != -1) {
+                        // 使用当前列表中的最新数据，而不是传入的item参数
+                        val updatedItem = when (val currentItem = currentList[index]) {
+                            is FriendItem.TextPost -> currentItem.copy(likes = currentItem.likes + 1)
+                            is FriendItem.ImagePost -> currentItem.copy(likes = currentItem.likes + 1)
+                            is FriendItem.VideoPost -> currentItem.copy(likes = currentItem.likes + 1)
+                            else -> currentItem
+                        }
+
+                        Log.d("FriendActivity", "Updated item: $updatedItem")
+                        
+                        currentList[index] = updatedItem
+                        adapter.submitList(currentList) {
+                            Toast.makeText(this@FriendActivity, "点赞成功", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
+            } catch (e: Exception) {
+                Toast.makeText(this@FriendActivity, "点赞失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
-        })
+        }
+    }
+    
+    private fun handleCommentClick(item: FriendItem) {
+        // 示例：显示评论功能
+        Toast.makeText(this@FriendActivity, "评论功能待实现，点击了 ${item.username} 的动态", Toast.LENGTH_SHORT).show()
     }
 }
